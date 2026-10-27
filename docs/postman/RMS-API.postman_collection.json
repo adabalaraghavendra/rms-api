@@ -1,0 +1,1780 @@
+{
+  "info": {
+    "name": "RMS API - Room Management",
+    "description": "Postman collection for **rms-api** (FastAPI). Covers every endpoint with ready payloads, tests and descriptions.\n\n## Quick start\n1. Start the API (`uvicorn app.main:app --reload --port 8000`) and make sure the database is migrated and an admin exists.\n2. Open the collection **Variables** tab and set `adminEmail` and `adminPassword` (and `serverUrl` if not port 8000). Leave the other values as they are.\n3. Run the folders **in order** (right-click the collection -> *Run*). Each login request stores its token in a collection variable, and each folder is already set to send the right one - no copy-pasting.\n\n## How the token is passed\n- **01 Login as admin** saves `adminToken`. Folders marked `[admin]` use `Bearer {{adminToken}}`.\n- **03 Login as member** saves `userToken`. Folders marked `[member]` use `Bearer {{userToken}}`.\n- Login requests themselves use *No Auth*. Tokens last 7 days; a `401` means log in again.\n\n## Response format\nEvery response, success or error: `{ status, message, data, pagination }`. A collection-level test checks this on every request. Lists are paginated with `?page=&page_size=`.\n\n## Notes\n- `month` and `today` are filled automatically by a pre-request script.\n- The run creates a test member and cleans it up in **09 Cleanup**. If a run stops half-way, change `userEmail` before running again (or delete the leftover member in the app).\n- The `Origin` header is not sent by Postman by default; '08 Error cases' fakes a foreign origin to show the 403.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "00 Health",
+      "description": "Server liveness check. No login needed.",
+      "item": [
+        {
+          "name": "Health check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{serverUrl}}/health",
+              "host": [
+                "{{serverUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Returns `{ \"ok\": true }` when the API is up. Note: this one is at the server root, not under `/api`, and does not use the standard envelope.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"ok is true\", () => pm.expect(pm.response.json().ok).to.eql(true));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "01 Auth - admin login",
+      "description": "Log in as the admin. **Run this first**: the test script stores the token in `adminToken`, which every admin request uses automatically.",
+      "item": [
+        {
+          "name": "Login as admin",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Public endpoint. Send the admin email and password (set `adminEmail` / `adminPassword` in the collection variables).\n\n**On success** a test script saves `data.token` into `adminToken` and the admin's id into `adminId`.\n\n**Errors:** `401` for a wrong email, wrong password or deactivated account (same message for all, on purpose).\n\n**Response format** (every endpoint): `{ \"status\": \"success\"|\"error\", \"message\": \"...\", \"data\": ..., \"pagination\": {...}|null }`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"{{adminPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Login succeeds\", () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Envelope is success\", () => pm.expect(body.status).to.eql(\"success\"));",
+                  "pm.test(\"User is an admin\", () => pm.expect(body.data.user.role).to.eql(\"admin\"));",
+                  "pm.test(\"Token returned\", () => pm.expect(body.data.token).to.be.a(\"string\").and.not.empty);",
+                  "// transport the token: later admin requests read {{adminToken}}",
+                  "pm.collectionVariables.set(\"adminToken\", body.data.token);",
+                  "pm.collectionVariables.set(\"adminId\", body.data.user.id);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 Members [admin]",
+      "description": "Manage the people in the room. **Admin token only** (a normal user gets `403`). The admin is also a member and takes part in rent splits.",
+      "item": [
+        {
+          "name": "List members (paginated)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users?page={{page}}&page_size={{pageSize}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "{{page}}",
+                  "description": "Page number, starts at 1"
+                },
+                {
+                  "key": "page_size",
+                  "value": "{{pageSize}}",
+                  "description": "Items per page, max 100"
+                }
+              ]
+            },
+            "description": "Returns members, oldest first. Each item: `id, name, email, role, is_active, created_at`.\n\n**Pagination:** `page` (starts at 1) and `page_size` (1-100, default 10). The response `pagination` block is `{ page, page_size, total_items, total_pages, has_next, has_prev }`.\n\nTip: `page_size=100` returns everyone in one call (used by the UI dropdowns).\n\n**Response format** (every endpoint): `{ \"status\": \"success\"|\"error\", \"message\": \"...\", \"data\": ..., \"pagination\": {...}|null }`"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test(\"data is an array\", () => pm.expect(b.data).to.be.an(\"array\"));",
+                  "pm.test(\"pagination block present\", () => pm.expect(b.pagination).to.include.keys(\"page\",\"page_size\",\"total_items\",\"total_pages\",\"has_next\",\"has_prev\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create member",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ]
+            },
+            "description": "Adds a member to the room. `role` is `user` (default) or `admin`. Password: 6-72 characters; email must be unique.\n\nThe script saves the new member's id into `memberId` for the later steps. Uses `userEmail` / `userPassword`.\n\n**Errors:** `409` email already used, `400` validation (short password etc.).\n\n**Response format** (every endpoint): `{ \"status\": \"success\"|\"error\", \"message\": \"...\", \"data\": ..., \"pagination\": {...}|null }`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Test Member\",\n  \"email\": \"{{userEmail}}\",\n  \"password\": \"{{userPassword}}\",\n  \"role\": \"user\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Member created (201)\", () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.test(\"Role is user\", () => pm.expect(b.data.role).to.eql(\"user\"));",
+                  "pm.collectionVariables.set(\"memberId\", b.data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update member - rename",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{memberId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{memberId}}"
+              ]
+            },
+            "description": "Partial update: send only the fields to change. Fields: `name`, `isActive` (boolean), `password` (6-72). This call changes the name only.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Test Member (renamed)\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Name updated\", () => pm.expect(pm.response.json().data.name).to.include(\"renamed\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update member - deactivate",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{memberId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{memberId}}"
+              ]
+            },
+            "description": "`isActive: false` keeps the member's history but blocks login and removes them from fair-share and rent splits. Their existing tokens stop working immediately. You cannot deactivate yourself (`400`).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"isActive\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Now inactive\", () => pm.expect(pm.response.json().data.is_active).to.eql(false));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update member - activate",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{memberId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{memberId}}"
+              ]
+            },
+            "description": "Re-activates the member so they can log in again.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"isActive\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Now active\", () => pm.expect(pm.response.json().data.is_active).to.eql(true));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update member - reset password",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{memberId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{memberId}}"
+              ]
+            },
+            "description": "Admin sets a new password for the member (6-72 characters). Here it is set to `userPassword`, so the next login still works.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"password\": \"{{userPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{adminToken}}",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "03 Auth - member",
+      "description": "Calls made by a normal member. **Run the admin's 'Create member' first.** Login stores the member's token in `userToken`; the other requests in this folder use it.",
+      "item": [
+        {
+          "name": "Login as member",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Same endpoint as the admin login, with the member's credentials (`userEmail` / `userPassword`). Saves the token in `userToken` and the id in `userId`.\n\n**Response format** (every endpoint): `{ \"status\": \"success\"|\"error\", \"message\": \"...\", \"data\": ..., \"pagination\": {...}|null }`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"password\": \"{{userPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Login succeeds\", () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test(\"User role\", () => pm.expect(body.data.user.role).to.eql(\"user\"));",
+                  "pm.collectionVariables.set(\"userToken\", body.data.token);",
+                  "pm.collectionVariables.set(\"userId\", body.data.user.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get my profile",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "me"
+              ]
+            },
+            "description": "Returns the logged-in user: `id, name, email, role`. Also a quick way to check that a token is still valid (`401` when it is missing, expired, or the user was deactivated or deleted).\n\n**Response format** (every endpoint): `{ \"status\": \"success\"|\"error\", \"message\": \"...\", \"data\": ..., \"pagination\": {...}|null }`"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Email matches\", () => pm.expect(pm.response.json().data.email).to.eql(pm.collectionVariables.get(\"userEmail\")));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update my profile",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/profile",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "profile"
+              ]
+            },
+            "description": "Change your own name and email. Both fields are required. `409` if the email belongs to someone else. Keep the email equal to `userEmail`, or update that variable too, otherwise your next login will use the old one.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Test Member (edited)\",\n  \"email\": \"{{userEmail}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Change my password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "password"
+              ]
+            },
+            "description": "Needs the current password. New password: 6-72 characters. `400` if the current password is wrong. On success the script copies `newUserPassword` into `userPassword` so later logins keep working.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"{{userPassword}}\",\n  \"newPassword\": \"{{newUserPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set(\"userPassword\", pm.collectionVariables.get(\"newUserPassword\"));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{userToken}}",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "04 Expenses [member]",
+      "description": "A member records and manages their **own** maintenance expenses. Members can only edit or delete their own; the admin can manage any.",
+      "item": [
+        {
+          "name": "Add expense",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/expenses",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "expenses"
+              ]
+            },
+            "description": "Fields: `title` (required, max 200), `category` (default `Other`), `amount` (> 0), `expenseDate` (`YYYY-MM-DD`, default today), `note` (optional, max 500). Suggested categories: Groceries, Electricity, Water, Internet, Gas, Cleaning, Repairs, Furniture, Other.\n\nThe script saves the new id into `expenseId`.\n\n**Response format** (every endpoint): `{ \"status\": \"success\"|\"error\", \"message\": \"...\", \"data\": ..., \"pagination\": {...}|null }`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Vegetables\",\n  \"category\": \"Groceries\",\n  \"amount\": 100.50,\n  \"expenseDate\": \"{{today}}\",\n  \"note\": \"Weekly market\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Expense created (201)\", () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.test(\"Amount stored\", () => pm.expect(b.data.amount).to.eql(100.5));",
+                  "pm.collectionVariables.set(\"expenseId\", b.data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Add a second expense (to be deleted)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/expenses",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "expenses"
+              ]
+            },
+            "description": "A throw-away expense used by the delete request below.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Wifi recharge\",\n  \"category\": \"Internet\",\n  \"amount\": 60,\n  \"expenseDate\": \"{{today}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 201\", () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set(\"tempExpenseId\", pm.response.json().data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List my expenses (paginated)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/expenses/mine?month={{month}}&page={{page}}&page_size={{pageSize}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "expenses",
+                "mine"
+              ],
+              "query": [
+                {
+                  "key": "month",
+                  "value": "{{month}}",
+                  "description": "Optional, YYYY-MM"
+                },
+                {
+                  "key": "page",
+                  "value": "{{page}}"
+                },
+                {
+                  "key": "page_size",
+                  "value": "{{pageSize}}"
+                }
+              ]
+            },
+            "description": "Your expenses, newest first. Optional `month=YYYY-MM` filter. Each item: `id, user_id, user_name, title, category, amount, expense_date, note`.\n\n**Pagination:** `page` (starts at 1) and `page_size` (1-100, default 10). The response `pagination` block is `{ page, page_size, total_items, total_pages, has_next, has_prev }`.\n\n**Response format** (every endpoint): `{ \"status\": \"success\"|\"error\", \"message\": \"...\", \"data\": ..., \"pagination\": {...}|null }`"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test(\"Has expenses\", () => pm.expect(b.pagination.total_items).to.be.above(0));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update my expense",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/expenses/{{expenseId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "expenses",
+                "{{expenseId}}"
+              ]
+            },
+            "description": "Replaces all editable fields (same body as 'Add expense'). `404` if the expense does not exist or belongs to someone else.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Vegetables and fruit\",\n  \"category\": \"Groceries\",\n  \"amount\": 120,\n  \"expenseDate\": \"{{today}}\",\n  \"note\": \"Edited\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Amount updated\", () => pm.expect(pm.response.json().data.amount).to.eql(120));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete my expense",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/expenses/{{tempExpenseId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "expenses",
+                "{{tempExpenseId}}"
+              ]
+            },
+            "description": "Deletes the throw-away expense. Returns the envelope with `data: null`."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"data is null\", () => pm.expect(pm.response.json().data).to.eql(null));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{userToken}}",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "05 Expenses [admin]",
+      "description": "The admin sees **everyone's** expenses. Admin token only.",
+      "item": [
+        {
+          "name": "List all expenses (paginated)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/expenses?month={{month}}&page={{page}}&page_size={{pageSize}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "expenses"
+              ],
+              "query": [
+                {
+                  "key": "month",
+                  "value": "{{month}}",
+                  "description": "Optional, YYYY-MM"
+                },
+                {
+                  "key": "page",
+                  "value": "{{page}}"
+                },
+                {
+                  "key": "page_size",
+                  "value": "{{pageSize}}"
+                }
+              ]
+            },
+            "description": "Everyone's expenses, newest first. Optional filters: `month=YYYY-MM`, `userId=<member id>`.\n\n**Pagination:** `page` (starts at 1) and `page_size` (1-100, default 10). The response `pagination` block is `{ page, page_size, total_items, total_pages, has_next, has_prev }`.\n\n**Response format** (every endpoint): `{ \"status\": \"success\"|\"error\", \"message\": \"...\", \"data\": ..., \"pagination\": {...}|null }`"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Has data\", () => pm.expect(pm.response.json().pagination.total_items).to.be.above(0));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List one member's expenses",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/expenses?userId={{memberId}}&page={{page}}&page_size={{pageSize}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "expenses"
+              ],
+              "query": [
+                {
+                  "key": "userId",
+                  "value": "{{memberId}}",
+                  "description": "Only this member"
+                },
+                {
+                  "key": "page",
+                  "value": "{{page}}"
+                },
+                {
+                  "key": "page_size",
+                  "value": "{{pageSize}}"
+                }
+              ]
+            },
+            "description": "Same endpoint filtered with `userId` (uses `memberId`)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Every row belongs to the member\", () => pm.response.json().data.forEach(e => pm.expect(e.user_id).to.eql(Number(pm.collectionVariables.get(\"memberId\")))));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{adminToken}}",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "06 Rent split [admin]",
+      "description": "The admin decides **who pays rent** and **how it is divided**. Splits are stored per month (`YYYY-MM`); saving again replaces that month's split. Amounts are handled in whole cents, so shares always add up to the total exactly.",
+      "item": [
+        {
+          "name": "Get rent split for a month",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/rent?month={{month}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rent"
+              ],
+              "query": [
+                {
+                  "key": "month",
+                  "value": "{{month}}",
+                  "description": "YYYY-MM, defaults to the current month"
+                }
+              ]
+            },
+            "description": "Returns `{ month, split }`. `split` is `null` when the admin has not set that month. Otherwise `split = { totalRent, mode, shares: [{ user_id, name, amount }] }`."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Save split - equal, selected members",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/rent",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rent"
+              ]
+            },
+            "description": "**mode `equal`**: divides `totalRent` equally between the members in `userIds` (here the admin and the test member). Leftover cents go to the first payers. Members not listed pay nothing this month.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"month\": \"{{month}}\",\n  \"totalRent\": {{rentTotal}},\n  \"mode\": \"equal\",\n  \"userIds\": [\n    {{adminId}},\n    {{memberId}}\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Split saved (201)\", () => pm.response.to.have.status(201));",
+                  "const split = pm.response.json().data.split;",
+                  "pm.test(\"Mode is equal\", () => pm.expect(split.mode).to.eql(\"equal\"));",
+                  "pm.test(\"Shares add up to the total\", () => pm.expect(Math.round(split.shares.reduce((a, s) => a + s.amount, 0) * 100)).to.eql(Math.round(split.totalRent * 100)));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Save split - equal, all active members",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/rent",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rent"
+              ]
+            },
+            "description": "Leave `userIds` empty (or omit it) and the rent is divided equally between **every active member**, admin included.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"month\": \"{{month}}\",\n  \"totalRent\": {{rentTotal}},\n  \"mode\": \"equal\",\n  \"userIds\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 201\", () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Save split - custom amounts",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/rent",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rent"
+              ]
+            },
+            "description": "**mode `custom`**: the admin types each payer's amount in `shares`. Only members listed here pay rent. The amounts must add up to `totalRent`, otherwise `400` (\"Shares total ... but rent is ...\"). Defaults: rentTotal 1000 = adminShare 600 + memberShare 400.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"month\": \"{{month}}\",\n  \"totalRent\": {{rentTotal}},\n  \"mode\": \"custom\",\n  \"shares\": [\n    {\n      \"userId\": {{adminId}},\n      \"amount\": {{adminShare}}\n    },\n    {\n      \"userId\": {{memberId}},\n      \"amount\": {{memberShare}}\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Split saved (201)\", () => pm.response.to.have.status(201));",
+                  "pm.test(\"Mode is custom\", () => pm.expect(pm.response.json().data.split.mode).to.eql(\"custom\"));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{adminToken}}",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "06b Rent [member]",
+      "description": "A member sees their own rent share.",
+      "item": [
+        {
+          "name": "My rent history",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/rent/mine",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rent",
+                "mine"
+              ]
+            },
+            "description": "Every month in which the caller pays rent: `[{ month, total_rent, amount }]`, newest first."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"data is an array\", () => pm.expect(pm.response.json().data).to.be.an(\"array\"));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{userToken}}",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "07 Summary",
+      "description": "Dashboard numbers.",
+      "item": [
+        {
+          "name": "My summary [member]",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/summary/mine?month={{month}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "summary",
+                "mine"
+              ],
+              "query": [
+                {
+                  "key": "month",
+                  "value": "{{month}}",
+                  "description": "YYYY-MM, defaults to the current month"
+                }
+              ]
+            },
+            "description": "For the caller and one month: `{ month, totalSpent, byCategory: [{category, total}], rent }`. `rent` is `null` until the admin sets that month's split."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{userToken}}",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "07b Summary [admin]",
+      "description": "Dashboard numbers for the whole room.",
+      "item": [
+        {
+          "name": "Room summary [admin]",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/summary?month={{month}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "month",
+                  "value": "{{month}}",
+                  "description": "YYYY-MM, defaults to the current month"
+                }
+              ]
+            },
+            "description": "One row per active member for the month:\n\n- `spent` - what they paid\n- `fair_share` - total spend / active members\n- `balance` - `spent - fair_share` (positive: the others owe them)\n- `rent` - their rent share\n\nPlus `totalSpent` and `totalRent`. Total due for a person = `rent - balance`."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "pm.test(\"Has members\", () => pm.expect(d.members).to.be.an(\"array\").that.is.not.empty);",
+                  "pm.test(\"Member fields\", () => pm.expect(d.members[0]).to.include.keys(\"spent\",\"fair_share\",\"balance\",\"rent\"));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{adminToken}}",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "08 Error cases",
+      "description": "Each request here is **expected to fail**; the tests assert the right status code and the standard error envelope. Useful as a regression check.",
+      "item": [
+        {
+          "name": "Login with wrong password -> 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Wrong credentials give `401 Invalid credentials`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"definitely-wrong\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"Error envelope\", () => pm.expect(pm.response.json().status).to.eql(\"error\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "No token -> 401",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ]
+            },
+            "description": "Any protected endpoint without a token returns `401 Authentication required`.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Member calls an admin endpoint -> 403",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ]
+            },
+            "description": "Uses the **member** token (`{{userToken}}`, set on this request only). A normal member is rejected by admin-only endpoints: `403`.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 403\", () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invalid amount -> 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/expenses",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "expenses"
+              ]
+            },
+            "description": "`amount` must be greater than 0. Validation errors return `400` with `Invalid <field>: <reason>`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Bad\",\n  \"amount\": -5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 400\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "page_size too large -> 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users?page_size=500",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ],
+              "query": [
+                {
+                  "key": "page_size",
+                  "value": "500"
+                }
+              ]
+            },
+            "description": "`page_size` is capped at 100."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 400\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Custom split not adding up -> 400",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/rent",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "rent"
+              ]
+            },
+            "description": "Shares must add up to the total rent exactly.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"month\": \"{{month}}\",\n  \"totalRent\": 1000,\n  \"mode\": \"custom\",\n  \"shares\": [\n    {\n      \"userId\": {{adminId}},\n      \"amount\": 400\n    },\n    {\n      \"userId\": {{memberId}},\n      \"amount\": 400\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"Message explains the gap\", () => pm.expect(pm.response.json().message).to.include(\"800.00\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Foreign origin -> 403",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Origin",
+                "value": "http://evil.example"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ]
+            },
+            "description": "Browsers on a site that is not in `CLIENT_ORIGIN` are refused by the server (`Origin not allowed`). Postman lets us fake the `Origin` header to demonstrate it."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 403\", () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{adminToken}}",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "09 Cleanup [admin]",
+      "description": "Removes the test data created above. Run last.",
+      "item": [
+        {
+          "name": "Admin deletes an expense",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/expenses/{{expenseId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "expenses",
+                "{{expenseId}}"
+              ]
+            },
+            "description": "The admin may delete any member's expense."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete member",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{memberId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{memberId}}"
+              ]
+            },
+            "description": "**Permanent.** Removes the member and all their expenses and rent shares. You cannot delete yourself (`400`); unknown id gives `404`. Use 'Update member - deactivate' instead to keep history."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.unset(\"memberId\");"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{adminToken}}",
+            "type": "string"
+          }
+        ]
+      }
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Defaults that depend on the date, so the collection never goes stale",
+          "if (!pm.collectionVariables.get(\"month\")) pm.collectionVariables.set(\"month\", new Date().toISOString().slice(0, 7));",
+          "pm.collectionVariables.set(\"today\", new Date().toISOString().slice(0, 10));"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Every endpoint (except /health) must answer with the standard envelope",
+          "if (!pm.request.url.getPath().endsWith(\"/health\")) {",
+          "  pm.test(\"Standard response envelope\", () => {",
+          "    const b = pm.response.json();",
+          "    pm.expect(b).to.have.all.keys(\"status\", \"message\", \"data\", \"pagination\");",
+          "    pm.expect(b.status).to.be.oneOf([\"success\", \"error\"]);",
+          "  });",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "serverUrl",
+      "value": "http://localhost:8000",
+      "type": "string",
+      "description": "API server root. Change the port here if you run uvicorn elsewhere."
+    },
+    {
+      "key": "baseUrl",
+      "value": "{{serverUrl}}/api",
+      "type": "string",
+      "description": "All endpoints live under /api."
+    },
+    {
+      "key": "adminEmail",
+      "value": "admin@example.com",
+      "type": "string",
+      "description": "SET THIS: the admin created by `python -m scripts.seed_admin`."
+    },
+    {
+      "key": "adminPassword",
+      "value": "change-me",
+      "type": "string",
+      "description": "SET THIS: the admin's password."
+    },
+    {
+      "key": "userEmail",
+      "value": "test.member@example.com",
+      "type": "string",
+      "description": "Email for the throw-away test member created by the collection."
+    },
+    {
+      "key": "userPassword",
+      "value": "Member@123",
+      "type": "string",
+      "description": "Password for the test member."
+    },
+    {
+      "key": "newUserPassword",
+      "value": "Member@456",
+      "type": "string",
+      "description": "Used by 'Change my password'."
+    },
+    {
+      "key": "month",
+      "value": "",
+      "type": "string",
+      "description": "YYYY-MM used by filters. Filled automatically with the current month if left empty."
+    },
+    {
+      "key": "today",
+      "value": "",
+      "type": "string",
+      "description": "Filled automatically with today's date (YYYY-MM-DD) before every request."
+    },
+    {
+      "key": "page",
+      "value": "1",
+      "type": "string",
+      "description": "Page number for list requests."
+    },
+    {
+      "key": "pageSize",
+      "value": "10",
+      "type": "string",
+      "description": "Items per page for list requests (max 100)."
+    },
+    {
+      "key": "rentTotal",
+      "value": "1000",
+      "type": "string",
+      "description": "Total rent used by the rent split requests."
+    },
+    {
+      "key": "adminShare",
+      "value": "600",
+      "type": "string",
+      "description": "Custom split: the admin's share."
+    },
+    {
+      "key": "memberShare",
+      "value": "400",
+      "type": "string",
+      "description": "Custom split: the member's share (adminShare + memberShare must equal rentTotal)."
+    },
+    {
+      "key": "adminToken",
+      "value": "",
+      "type": "string",
+      "description": "Filled by 'Login as admin'. Used by every admin request."
+    },
+    {
+      "key": "userToken",
+      "value": "",
+      "type": "string",
+      "description": "Filled by 'Login as member'. Used by every member request."
+    },
+    {
+      "key": "adminId",
+      "value": "",
+      "type": "string",
+      "description": "Filled by 'Login as admin'."
+    },
+    {
+      "key": "userId",
+      "value": "",
+      "type": "string",
+      "description": "Filled by 'Login as member'."
+    },
+    {
+      "key": "memberId",
+      "value": "",
+      "type": "string",
+      "description": "Filled by 'Create member'."
+    },
+    {
+      "key": "expenseId",
+      "value": "",
+      "type": "string",
+      "description": "Filled by 'Add expense'."
+    },
+    {
+      "key": "tempExpenseId",
+      "value": "",
+      "type": "string",
+      "description": "Filled by 'Add a second expense'."
+    }
+  ]
+}

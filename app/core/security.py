@@ -1,52 +1,44 @@
-import re
-from datetime import date, datetime, timedelta, timezone
+"""Password hashing and login tokens."""
+from datetime import datetime, timedelta, timezone
 
 import bcrypt
 import jwt
-from fastapi import Depends, HTTPException
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.core.config import JWT_SECRET
-
-_bearer = HTTPBearer(auto_error=False)
+from app.core.config import Settings
+from app.core.exceptions import UnauthorizedError
 
 
-def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+class PasswordHasher:
+    """bcrypt wrapper (bcrypt only looks at the first 72 bytes)."""
+
+    @staticmethod
+    def _raw(password: str) -> bytes:
+        return password.encode()[:72]
+
+    def hash(self, password: str) -> str:
+        return bcrypt.hashpw(self._raw(password), bcrypt.gensalt()).decode()
+
+    def verify(self, password: str, hashed: str) -> bool:
+        try:
+            return bcrypt.checkpw(self._raw(password), hashed.encode())
+        except ValueError:
+            return False
 
 
-def verify_password(password: str, hashed: str) -> bool:
-    return bcrypt.checkpw(password.encode(), hashed.encode())
+class TokenService:
+    """Creates and verifies signed JWT login tokens."""
 
+    def __init__(self, settings: Settings):
+        self._secret = settings.jwt_secret
+        self._algorithm = settings.jwt_algorithm
+        self._ttl = timedelta(days=settings.token_ttl_days)
 
-def create_token(user: dict) -> str:
-    payload = {
-        "id": user["id"],
-        "role": user["role"],
-        "roomId": user["room_id"],
-        "exp": datetime.now(timezone.utc) + timedelta(days=7),
-    }
-    return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+    def create(self, user_id: int) -> str:
+        payload = {"sub": str(user_id), "exp": datetime.now(timezone.utc) + self._ttl}
+        return jwt.encode(payload, self._secret, algorithm=self._algorithm)
 
-
-def current_user(creds: HTTPAuthorizationCredentials | None = Depends(_bearer)) -> dict:
-    if not creds:
-        raise HTTPException(401, "Authentication required")
-    try:
-        return jwt.decode(creds.credentials, JWT_SECRET, algorithms=["HS256"])  # {id, role, roomId}
-    except jwt.PyJWTError:
-        raise HTTPException(401, "Invalid or expired token")
-
-
-def admin_only(user: dict = Depends(current_user)) -> dict:
-    if user["role"] != "admin":
-        raise HTTPException(403, "Admin access required")
-    return user
-
-
-def valid_month(month: str | None) -> str:
-    """Return month (default: current) or raise 400 if not YYYY-MM."""
-    month = month or date.today().strftime("%Y-%m")
-    if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
-        raise HTTPException(400, "month must be YYYY-MM")
-    return month
+    def read_user_id(self, token: str) -> int:
+        try:
+            return int(jwt.decode(token, self._secret, algorithms=[self._algorithm])["sub"])
+        except (jwt.PyJWTError, KeyError, ValueError):
+            raise UnauthorizedError("Invalid or expired token")

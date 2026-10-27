@@ -1,1 +1,1 @@
-"""Shared infrastructure: settings, database, security."""
+"""Infrastructure: settings, database, security, errors, middleware."""
