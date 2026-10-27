@@ -18,7 +18,26 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Room Management API", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=CLIENT_ORIGINS, allow_methods=["*"], allow_headers=["*"])
+
+# 1) CORS: tells browsers which site may call this API (origins come from CLIENT_ORIGIN in .env).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CLIENT_ORIGINS,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+
+
+# 2) Origin guard: the server itself refuses browser calls from any other site.
+#    Added after CORS so it runs first (outermost). Calls with no Origin header
+#    (curl, Postman, server-to-server) pass here and are still protected by login tokens.
+@app.middleware("http")
+async def only_allowed_origins(request: Request, call_next):
+    origin = request.headers.get("origin")
+    if origin and origin not in CLIENT_ORIGINS:
+        return JSONResponse({"message": "Origin not allowed"}, status_code=499)
+    return await call_next(request)
+
 
 # The React client reads errors from a `message` field
 @app.exception_handler(HTTPException)

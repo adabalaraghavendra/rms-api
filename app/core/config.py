@@ -6,7 +6,8 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 JWT_SECRET = os.getenv("JWT_SECRET")
-CLIENT_ORIGINS = [o.strip() for o in os.getenv("CLIENT_ORIGIN", "http://localhost:5173").split(",")]
+# Comma-separated list, e.g. "http://localhost:5173,https://rms.example.com" (no trailing slash)
+CLIENT_ORIGINS = [o.strip().rstrip("/") for o in os.getenv("CLIENT_ORIGIN").split(",") if o.strip()]
 
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is not set (see .env.example)")
