@@ -23,12 +23,12 @@ def create_user(body: UserCreate, ctrl: UserController = Depends(get_user_contro
 
 @router.patch("/{user_id}", response_model=ApiResponse[UserOut])
 def update_user(
-    user_id: int, body: UserUpdate, admin: User = Depends(require_admin),
+    user_id: str, body: UserUpdate, admin: User = Depends(require_admin),
     ctrl: UserController = Depends(get_user_controller),
 ):
     return ctrl.update(admin, user_id, body)
 
 
 @router.delete("/{user_id}", response_model=ApiResponse[None])
-def delete_user(user_id: int, admin: User = Depends(require_admin), ctrl: UserController = Depends(get_user_controller)):
+def delete_user(user_id: str, admin: User = Depends(require_admin), ctrl: UserController = Depends(get_user_controller)):
     return ctrl.delete(admin, user_id)

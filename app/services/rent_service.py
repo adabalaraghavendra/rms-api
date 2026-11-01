@@ -1,4 +1,4 @@
-from sqlalchemy.orm import Session
+from pymongo.database import Database
 
 from app.core.exceptions import BadRequestError
 from app.models.rent import RentMode, RentSplit
@@ -11,7 +11,7 @@ from app.shared.money import from_cents, to_cents
 
 
 class RentService(BaseService):
-    def __init__(self, db: Session):
+    def __init__(self, db: Database):
         super().__init__(db)
         self.rents = RentRepository(db)
         self.users = UserRepository(db)
@@ -30,14 +30,12 @@ class RentService(BaseService):
             raise BadRequestError("No active members")
         total_cents = to_cents(data.totalRent)
         allocations = self._strategies[data.mode].allocate(total_cents, data, active_ids)
-        self.rents.replace(
+        return self.rents.replace(
             data.month,
             from_cents(total_cents),
             data.mode.value,
             [(user_id, from_cents(cents)) for user_id, cents in allocations],
         )
-        self.commit()
-        return self.rents.get_by_month(data.month)
 
-    def my_rent(self, user_id: int) -> list[tuple[str, float, float]]:
+    def my_rent(self, user_id: str) -> list[tuple[str, float, float]]:
         return self.rents.list_for_user(user_id)

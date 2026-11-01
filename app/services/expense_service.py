@@ -1,4 +1,4 @@
-from sqlalchemy.orm import Session
+from pymongo.database import Database
 
 from app.core.exceptions import NotFoundError
 from app.models.expense import Expense
@@ -10,14 +10,14 @@ from app.shared.pagination import Page, PageParams
 
 
 class ExpenseService(BaseService):
-    def __init__(self, db: Session):
+    def __init__(self, db: Database):
         super().__init__(db)
         self.expenses = ExpenseRepository(db)
 
     def list_mine(self, actor: User, params: PageParams, month: str | None) -> Page[Expense]:
         return self.expenses.list_page(params, month=month, user_id=actor.id)
 
-    def list_all(self, params: PageParams, month: str | None, user_id: int | None) -> Page[Expense]:
+    def list_all(self, params: PageParams, month: str | None, user_id: str | None) -> Page[Expense]:
         return self.expenses.list_page(params, month=month, user_id=user_id)
 
     def create(self, actor: User, data: ExpenseIn) -> Expense:
@@ -28,23 +28,20 @@ class ExpenseService(BaseService):
             amount=data.amount,
             expense_date=data.expenseDate,
             note=data.note,
+            user_name=actor.name,
         )
-        self.expenses.add(expense)
-        self.commit()
-        return expense
+        return self.expenses.add(expense)
 
-    def update(self, actor: User, expense_id: int, data: ExpenseIn) -> Expense:
+    def update(self, actor: User, expense_id: str, data: ExpenseIn) -> Expense:
         expense = self._get_manageable(actor, expense_id)
         expense.title, expense.category = data.title, data.category
         expense.amount, expense.expense_date, expense.note = data.amount, data.expenseDate, data.note
-        self.commit()
-        return expense
+        return self.expenses.save(expense)
 
-    def delete(self, actor: User, expense_id: int) -> None:
+    def delete(self, actor: User, expense_id: str) -> None:
         self.expenses.delete(self._get_manageable(actor, expense_id))
-        self.commit()
 
-    def _get_manageable(self, actor: User, expense_id: int) -> Expense:
+    def _get_manageable(self, actor: User, expense_id: str) -> Expense:
         """Owners manage their own expenses; the admin can manage any."""
         expense = self.expenses.get(expense_id)
         if not expense or (not actor.is_admin and expense.user_id != actor.id):

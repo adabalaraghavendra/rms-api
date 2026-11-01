@@ -32,8 +32,8 @@ class ExpenseIn(BaseModel):
 
 
 class ExpenseOut(ORMModel):
-    id: int
-    user_id: int
+    id: str
+    user_id: str
     user_name: str
     title: str
     category: str

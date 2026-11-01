@@ -33,12 +33,12 @@ class TokenService:
         self._algorithm = settings.jwt_algorithm
         self._ttl = timedelta(days=settings.token_ttl_days)
 
-    def create(self, user_id: int) -> str:
+    def create(self, user_id: str) -> str:
         payload = {"sub": str(user_id), "exp": datetime.now(timezone.utc) + self._ttl}
         return jwt.encode(payload, self._secret, algorithm=self._algorithm)
 
-    def read_user_id(self, token: str) -> int:
+    def read_user_id(self, token: str) -> str:
         try:
-            return int(jwt.decode(token, self._secret, algorithms=[self._algorithm])["sub"])
-        except (jwt.PyJWTError, KeyError, ValueError):
+            return str(jwt.decode(token, self._secret, algorithms=[self._algorithm])["sub"])
+        except (jwt.PyJWTError, KeyError):
             raise UnauthorizedError("Invalid or expired token")

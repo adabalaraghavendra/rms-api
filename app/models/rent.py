@@ -1,11 +1,11 @@
 import enum
+from dataclasses import dataclass, field
 from datetime import datetime
+from typing import ClassVar
 
-from sqlalchemy import CHAR, CheckConstraint, DateTime, ForeignKey, Numeric, Text, UniqueConstraint, func
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from bson import ObjectId
 
-from app.core.database import Base
-from app.models.user import User
+from app.models.base import Document, utcnow
 
 
 class RentMode(str, enum.Enum):
@@ -13,37 +13,50 @@ class RentMode(str, enum.Enum):
     CUSTOM = "custom"  # admin types each person's amount
 
 
-class RentSplit(Base):
-    """The month's rent and how it was divided. One per month."""
+@dataclass(kw_only=True)
+class RentShare:
+    """One payer's portion of a month's rent (stored inside the RentSplit document)."""
 
-    __tablename__ = "rent_splits"
-    __table_args__ = (CheckConstraint("total_rent >= 0"), CheckConstraint("mode IN ('equal','custom')"))
+    user_id: str
+    amount: float
+    name: str = ""  # not stored: filled in by the repository
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-    month: Mapped[str] = mapped_column(CHAR(7), unique=True)  # 'YYYY-MM'
-    total_rent: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False))
-    mode: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    @classmethod
+    def from_mongo(cls, doc: dict) -> "RentShare":
+        return cls(user_id=str(doc["user_id"]), amount=float(doc["amount"]))
 
-    shares: Mapped[list["RentShare"]] = relationship(
-        back_populates="split", cascade="all, delete-orphan", order_by="RentShare.id"
-    )
+    def to_mongo(self) -> dict:
+        return {"user_id": ObjectId(self.user_id), "amount": round(self.amount, 2)}
 
 
-class RentShare(Base):
-    """One payer's portion of a month's rent."""
+@dataclass(kw_only=True)
+class RentSplit(Document):
+    """The month's rent and how it was divided. One document per month, shares embedded.  Collection: rent_splits"""
 
-    __tablename__ = "rent_shares"
-    __table_args__ = (CheckConstraint("amount >= 0"), UniqueConstraint("split_id", "user_id"))
+    collection: ClassVar[str] = "rent_splits"
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-    split_id: Mapped[int] = mapped_column(ForeignKey("rent_splits.id", ondelete="CASCADE"))
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False))
+    month: str  # 'YYYY-MM'
+    total_rent: float
+    mode: str
+    shares: list[RentShare] = field(default_factory=list)
+    created_at: datetime = field(default_factory=utcnow)
 
-    split: Mapped[RentSplit] = relationship(back_populates="shares")
-    user: Mapped[User] = relationship(back_populates="rent_shares")
+    @classmethod
+    def from_mongo(cls, doc: dict) -> "RentSplit":
+        return cls(
+            id=str(doc["_id"]),
+            month=doc["month"],
+            total_rent=float(doc["total_rent"]),
+            mode=doc["mode"],
+            shares=[RentShare.from_mongo(s) for s in doc.get("shares", [])],
+            created_at=doc["created_at"],
+        )
 
-    @property
-    def name(self) -> str:
-        return self.user.name
+    def to_mongo(self) -> dict:
+        return {
+            "month": self.month,
+            "total_rent": round(self.total_rent, 2),
+            "mode": self.mode,
+            "shares": [s.to_mongo() for s in self.shares],
+            "created_at": self.created_at,
+        }

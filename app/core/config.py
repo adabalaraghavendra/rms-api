@@ -8,17 +8,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def _driver_url(url: str) -> str:
-    """Point a plain postgres URL at SQLAlchemy's psycopg (v3) driver."""
-    for prefix in ("postgres://", "postgresql://"):
-        if url.startswith(prefix):
-            return "postgresql+psycopg://" + url[len(prefix):]
-    return url
-
-
 @dataclass(frozen=True)
 class Settings:
-    database_url: str
+    mongodb_uri: str
+    mongodb_db: str
     jwt_secret: str
     jwt_algorithm: str = "HS256"
     token_ttl_days: int = 7
@@ -26,10 +19,10 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        database_url = os.getenv("DATABASE_URL")
+        mongodb_uri = os.getenv("MONGODB_URI")
         jwt_secret = os.getenv("JWT_SECRET")
-        if not database_url:
-            raise RuntimeError("DATABASE_URL is not set (see .env.example)")
+        if not mongodb_uri:
+            raise RuntimeError("MONGODB_URI is not set (see .env.example)")
         if not jwt_secret:
             raise RuntimeError("JWT_SECRET is not set (see .env.example)")
         # Comma-separated, no trailing slash: "http://localhost:5173,https://rms.example.com"
@@ -38,7 +31,12 @@ class Settings:
             for o in os.getenv("CLIENT_ORIGIN", "http://localhost:5173").split(",")
             if o.strip()
         )
-        return cls(database_url=_driver_url(database_url), jwt_secret=jwt_secret, client_origins=origins)
+        return cls(
+            mongodb_uri=mongodb_uri,
+            mongodb_db=os.getenv("MONGODB_DB", "room_management"),
+            jwt_secret=jwt_secret,
+            client_origins=origins,
+        )
 
 
 @lru_cache

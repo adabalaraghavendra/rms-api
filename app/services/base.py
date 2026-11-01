@@ -1,17 +1,9 @@
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
-
-from app.core.exceptions import ConflictError
+from pymongo.database import Database
 
 
 class BaseService:
-    def __init__(self, db: Session):
-        self.db = db
+    """Parent of every service. Services hold business rules and use repositories;
+    they never build queries themselves."""
 
-    def commit(self) -> None:
-        """Save the unit of work; a database constraint violation becomes a 409."""
-        try:
-            self.db.commit()
-        except IntegrityError as exc:
-            self.db.rollback()
-            raise ConflictError("Record already exists or is in use") from exc
+    def __init__(self, db: Database):
+        self.db = db

@@ -6,7 +6,7 @@ from app.shared.dates import MONTH_PATTERN
 
 
 class ShareIn(BaseModel):
-    userId: int
+    userId: str
     amount: float = Field(ge=0)
 
 
@@ -15,11 +15,11 @@ class RentSplitIn(BaseModel):
     totalRent: float = Field(ge=0)
     mode: RentMode
     shares: list[ShareIn] = []   # custom mode: who pays and how much
-    userIds: list[int] = []      # equal mode: who pays (empty = every active member)
+    userIds: list[str] = []      # equal mode: who pays (empty = every active member)
 
 
 class ShareOut(ORMModel):
-    user_id: int
+    user_id: str
     name: str
     amount: float
 

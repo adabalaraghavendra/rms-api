@@ -17,10 +17,10 @@ class UserController:
         user = self.service.create(body)
         return ApiResponse.success(UserOut.model_validate(user), "Member added")
 
-    def update(self, actor: User, user_id: int, body: UserUpdate) -> ApiResponse:
+    def update(self, actor: User, user_id: str, body: UserUpdate) -> ApiResponse:
         user = self.service.update(actor, user_id, body)
         return ApiResponse.success(UserOut.model_validate(user), "Member updated")
 
-    def delete(self, actor: User, user_id: int) -> ApiResponse:
+    def delete(self, actor: User, user_id: str) -> ApiResponse:
         self.service.delete(actor, user_id)
         return ApiResponse.success(message="Member deleted")

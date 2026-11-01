@@ -7,7 +7,7 @@ from app.schemas.base import ORMModel
 
 
 class UserBrief(ORMModel):
-    id: int
+    id: str
     name: str
     email: str
     role: str

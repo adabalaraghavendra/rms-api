@@ -1,4 +1,4 @@
-from sqlalchemy.orm import Session
+from pymongo.database import Database
 
 from app.core.exceptions import BadRequestError, ConflictError, UnauthorizedError
 from app.core.security import PasswordHasher, TokenService
@@ -9,7 +9,7 @@ from app.services.base import BaseService
 
 
 class AuthService(BaseService):
-    def __init__(self, db: Session, hasher: PasswordHasher, tokens: TokenService):
+    def __init__(self, db: Database, hasher: PasswordHasher, tokens: TokenService):
         super().__init__(db)
         self.users = UserRepository(db)
         self.hasher = hasher
@@ -27,11 +27,10 @@ class AuthService(BaseService):
         if other and other.id != user.id:
             raise ConflictError("Email already in use")
         user.name, user.email = data.name, data.email
-        self.commit()
-        return user
+        return self.users.save(user)
 
     def change_password(self, user: User, data: PasswordChange) -> None:
         if not self.hasher.verify(data.currentPassword, user.password_hash):
             raise BadRequestError("Current password is incorrect")
         user.password_hash = self.hasher.hash(data.newPassword)
-        self.commit()
+        self.users.save(user)

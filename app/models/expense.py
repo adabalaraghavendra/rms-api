@@ -1,33 +1,50 @@
+from dataclasses import dataclass, field
 from datetime import date, datetime
+from typing import ClassVar
 
-from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Index, Numeric, Text, func
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from bson import ObjectId
 
-from app.core.database import Base
-from app.models.user import User
+from app.models.base import Document, utcnow
 
 
-class Expense(Base):
-    """Money one person spent on room maintenance."""
+@dataclass(kw_only=True)
+class Expense(Document):
+    """Money one person spent on room maintenance.  Collection: expenses
 
-    __tablename__ = "expenses"
-    __table_args__ = (
-        CheckConstraint("amount > 0"),
-        Index("idx_expenses_user", "user_id"),
-        Index("idx_expenses_date", "expense_date"),
-    )
+    expense_date is stored as 'YYYY-MM-DD' text, which sorts and range-filters correctly.
+    """
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    title: Mapped[str] = mapped_column(Text)
-    category: Mapped[str] = mapped_column(Text, default="Other", server_default="Other")
-    amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False))
-    expense_date: Mapped[date] = mapped_column(Date, server_default=func.current_date())
-    note: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    collection: ClassVar[str] = "expenses"
 
-    user: Mapped[User] = relationship(back_populates="expenses")
+    user_id: str
+    title: str
+    amount: float
+    expense_date: date
+    category: str = "Other"
+    note: str | None = None
+    created_at: datetime = field(default_factory=utcnow)
+    user_name: str = ""  # not stored: filled in by the repository from the users collection
 
-    @property
-    def user_name(self) -> str:
-        return self.user.name
+    @classmethod
+    def from_mongo(cls, doc: dict) -> "Expense":
+        return cls(
+            id=str(doc["_id"]),
+            user_id=str(doc["user_id"]),
+            title=doc["title"],
+            category=doc.get("category", "Other"),
+            amount=float(doc["amount"]),
+            expense_date=date.fromisoformat(doc["expense_date"]),
+            note=doc.get("note"),
+            created_at=doc["created_at"],
+        )
+
+    def to_mongo(self) -> dict:
+        return {
+            "user_id": ObjectId(self.user_id),
+            "title": self.title,
+            "category": self.category,
+            "amount": round(self.amount, 2),
+            "expense_date": self.expense_date.isoformat(),
+            "note": self.note,
+            "created_at": self.created_at,
+        }

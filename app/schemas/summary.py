@@ -2,7 +2,7 @@ from pydantic import BaseModel
 
 
 class MemberSummary(BaseModel):
-    id: int
+    id: str
     name: str
     email: str
     role: str

@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "RMS API - Room Management",
-    "description": "Postman collection for **rms-api** (FastAPI). Covers every endpoint with ready payloads, tests and descriptions.\n\n## Quick start\n1. Start the API (`uvicorn app.main:app --reload --port 8000`) and make sure the database is migrated and an admin exists.\n2. Open the collection **Variables** tab and set `adminEmail` and `adminPassword` (and `serverUrl` if not port 8000). Leave the other values as they are.\n3. Run the folders **in order** (right-click the collection -> *Run*). Each login request stores its token in a collection variable, and each folder is already set to send the right one - no copy-pasting.\n\n## How the token is passed\n- **01 Login as admin** saves `adminToken`. Folders marked `[admin]` use `Bearer {{adminToken}}`.\n- **03 Login as member** saves `userToken`. Folders marked `[member]` use `Bearer {{userToken}}`.\n- Login requests themselves use *No Auth*. Tokens last 7 days; a `401` means log in again.\n\n## Response format\nEvery response, success or error: `{ status, message, data, pagination }`. A collection-level test checks this on every request. Lists are paginated with `?page=&page_size=`.\n\n## Notes\n- `month` and `today` are filled automatically by a pre-request script.\n- The run creates a test member and cleans it up in **09 Cleanup**. If a run stops half-way, change `userEmail` before running again (or delete the leftover member in the app).\n- The `Origin` header is not sent by Postman by default; '08 Error cases' fakes a foreign origin to show the 403.",
+    "description": "Postman collection for **rms-api** (FastAPI). Covers every endpoint with ready payloads, tests and descriptions.\n\n## Quick start\n1. Start the API (`uvicorn app.main:app --reload --port 8000`) and make sure MongoDB is migrated (`python -m migrations upgrade`) and an admin exists (`python -m scripts.seed_admin`). Ids in this API are 24-character strings.\n2. Open the collection **Variables** tab and set `adminEmail` and `adminPassword` (and `serverUrl` if not port 8000). Leave the other values as they are.\n3. Run the folders **in order** (right-click the collection -> *Run*). Each login request stores its token in a collection variable, and each folder is already set to send the right one - no copy-pasting.\n\n## How the token is passed\n- **01 Login as admin** saves `adminToken`. Folders marked `[admin]` use `Bearer {{adminToken}}`.\n- **03 Login as member** saves `userToken`. Folders marked `[member]` use `Bearer {{userToken}}`.\n- Login requests themselves use *No Auth*. Tokens last 7 days; a `401` means log in again.\n\n## Response format\nEvery response, success or error: `{ status, message, data, pagination }`. A collection-level test checks this on every request. Lists are paginated with `?page=&page_size=`.\n\n## Notes\n- `month` and `today` are filled automatically by a pre-request script.\n- The run creates a test member and cleans it up in **09 Cleanup**. If a run stops half-way, change `userEmail` before running again (or delete the leftover member in the app).\n- The `Origin` header is not sent by Postman by default; '08 Error cases' fakes a foreign origin to show the 403.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -893,7 +893,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
-                  "pm.test(\"Every row belongs to the member\", () => pm.response.json().data.forEach(e => pm.expect(e.user_id).to.eql(Number(pm.collectionVariables.get(\"memberId\")))));"
+                  "pm.test(\"Every row belongs to the member\", () => pm.response.json().data.forEach(e => pm.expect(e.user_id).to.eql(pm.collectionVariables.get(\"memberId\"))));"
                 ]
               }
             }
@@ -973,7 +973,7 @@
             "description": "**mode `equal`**: divides `totalRent` equally between the members in `userIds` (here the admin and the test member). Leftover cents go to the first payers. Members not listed pay nothing this month.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"month\": \"{{month}}\",\n  \"totalRent\": {{rentTotal}},\n  \"mode\": \"equal\",\n  \"userIds\": [\n    {{adminId}},\n    {{memberId}}\n  ]\n}",
+              "raw": "{\n  \"month\": \"{{month}}\",\n  \"totalRent\": {{rentTotal}},\n  \"mode\": \"equal\",\n  \"userIds\": [\n    \"{{adminId}}\",\n    \"{{memberId}}\"\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1062,7 +1062,7 @@
             "description": "**mode `custom`**: the admin types each payer's amount in `shares`. Only members listed here pay rent. The amounts must add up to `totalRent`, otherwise `400` (\"Shares total ... but rent is ...\"). Defaults: rentTotal 1000 = adminShare 600 + memberShare 400.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"month\": \"{{month}}\",\n  \"totalRent\": {{rentTotal}},\n  \"mode\": \"custom\",\n  \"shares\": [\n    {\n      \"userId\": {{adminId}},\n      \"amount\": {{adminShare}}\n    },\n    {\n      \"userId\": {{memberId}},\n      \"amount\": {{memberShare}}\n    }\n  ]\n}",
+              "raw": "{\n  \"month\": \"{{month}}\",\n  \"totalRent\": {{rentTotal}},\n  \"mode\": \"custom\",\n  \"shares\": [\n    {\n      \"userId\": \"{{adminId}}\",\n      \"amount\": {{adminShare}}\n    },\n    {\n      \"userId\": \"{{memberId}}\",\n      \"amount\": {{memberShare}}\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1474,7 +1474,7 @@
             "description": "Shares must add up to the total rent exactly.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"month\": \"{{month}}\",\n  \"totalRent\": 1000,\n  \"mode\": \"custom\",\n  \"shares\": [\n    {\n      \"userId\": {{adminId}},\n      \"amount\": 400\n    },\n    {\n      \"userId\": {{memberId}},\n      \"amount\": 400\n    }\n  ]\n}",
+              "raw": "{\n  \"month\": \"{{month}}\",\n  \"totalRent\": 1000,\n  \"mode\": \"custom\",\n  \"shares\": [\n    {\n      \"userId\": \"{{adminId}}\",\n      \"amount\": 400\n    },\n    {\n      \"userId\": \"{{memberId}}\",\n      \"amount\": 400\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"

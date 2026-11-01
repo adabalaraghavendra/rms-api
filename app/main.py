@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
-from app.core.database import engine
+from app.core.database import close_client, ping
 from app.core.error_handlers import register_exception_handlers
 from app.core.middleware import OriginGuardMiddleware
 from app.routers import api_router
@@ -12,8 +12,9 @@ from app.routers import api_router
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    ping()  # fail fast, with a clear error, if MongoDB cannot be reached
     yield
-    engine.dispose()
+    close_client()
 
 
 def create_app() -> FastAPI:

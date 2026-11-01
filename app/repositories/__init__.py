@@ -1,1 +1,1 @@
-"""Repositories: the only layer that talks to the database."""
+"""Repositories: the only layer that talks to the database (MongoDB)."""

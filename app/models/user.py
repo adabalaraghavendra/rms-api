@@ -1,15 +1,9 @@
 import enum
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import ClassVar
 
-from sqlalchemy import CheckConstraint, DateTime, Text, func, true
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-
-from app.core.database import Base
-
-if TYPE_CHECKING:
-    from app.models.expense import Expense
-    from app.models.rent import RentShare
+from app.models.base import Document, utcnow
 
 
 class Role(str, enum.Enum):
@@ -17,24 +11,41 @@ class Role(str, enum.Enum):
     USER = "user"
 
 
-class User(Base):
-    """A person living in the room. The admin is a member too."""
+@dataclass(kw_only=True)
+class User(Document):
+    """A person living in the room. The admin is a member too.  Collection: users"""
 
-    __tablename__ = "users"
-    __table_args__ = (CheckConstraint("role IN ('admin','user')"),)
+    collection: ClassVar[str] = "users"
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(Text)
-    email: Mapped[str] = mapped_column(Text, unique=True)
-    password_hash: Mapped[str] = mapped_column(Text)
-    role: Mapped[str] = mapped_column(Text, default=Role.USER.value, server_default=Role.USER.value)
-    is_active: Mapped[bool] = mapped_column(default=True, server_default=true())
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-    # Deleting a user removes their expenses and rent shares too.
-    expenses: Mapped[list["Expense"]] = relationship(back_populates="user", cascade="all, delete-orphan")
-    rent_shares: Mapped[list["RentShare"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    name: str
+    email: str
+    password_hash: str
+    role: str = Role.USER.value
+    is_active: bool = True
+    created_at: datetime = field(default_factory=utcnow)
 
     @property
     def is_admin(self) -> bool:
         return self.role == Role.ADMIN.value
+
+    @classmethod
+    def from_mongo(cls, doc: dict) -> "User":
+        return cls(
+            id=str(doc["_id"]),
+            name=doc["name"],
+            email=doc["email"],
+            password_hash=doc["password_hash"],
+            role=doc.get("role", Role.USER.value),
+            is_active=doc.get("is_active", True),
+            created_at=doc["created_at"],
+        )
+
+    def to_mongo(self) -> dict:
+        return {
+            "name": self.name,
+            "email": self.email,
+            "password_hash": self.password_hash,
+            "role": self.role,
+            "is_active": self.is_active,
+            "created_at": self.created_at,
+        }

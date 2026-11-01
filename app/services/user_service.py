@@ -1,8 +1,10 @@
-from sqlalchemy.orm import Session
+from pymongo.database import Database
 
 from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.core.security import PasswordHasher
 from app.models.user import User
+from app.repositories.expense_repository import ExpenseRepository
+from app.repositories.rent_repository import RentRepository
 from app.repositories.user_repository import UserRepository
 from app.schemas.user import UserCreate, UserUpdate
 from app.services.base import BaseService
@@ -10,9 +12,11 @@ from app.shared.pagination import Page, PageParams
 
 
 class UserService(BaseService):
-    def __init__(self, db: Session, hasher: PasswordHasher):
+    def __init__(self, db: Database, hasher: PasswordHasher):
         super().__init__(db)
         self.users = UserRepository(db)
+        self.expenses = ExpenseRepository(db)
+        self.rents = RentRepository(db)
         self.hasher = hasher
 
     def list_users(self, params: PageParams) -> Page[User]:
@@ -27,11 +31,9 @@ class UserService(BaseService):
             password_hash=self.hasher.hash(data.password),
             role=data.role.value,
         )
-        self.users.add(user)
-        self.commit()
-        return user
+        return self.users.add(user)  # the unique email index also guards against races
 
-    def update(self, actor: User, user_id: int, data: UserUpdate) -> User:
+    def update(self, actor: User, user_id: str, data: UserUpdate) -> User:
         user = self._get(user_id)
         if user.id == actor.id and data.isActive is False:
             raise BadRequestError("You cannot deactivate yourself")
@@ -41,17 +43,18 @@ class UserService(BaseService):
             user.is_active = data.isActive
         if data.password:
             user.password_hash = self.hasher.hash(data.password)
-        self.commit()
-        return user
+        return self.users.save(user)
 
-    def delete(self, actor: User, user_id: int) -> None:
+    def delete(self, actor: User, user_id: str) -> None:
         """Permanently remove a member together with their expenses and rent shares."""
         if user_id == actor.id:
             raise BadRequestError("You cannot delete yourself")
-        self.users.delete(self._get(user_id))
-        self.commit()
+        user = self._get(user_id)
+        self.expenses.delete_by_user(user.id)
+        self.rents.remove_user_shares(user.id)
+        self.users.delete(user)
 
-    def _get(self, user_id: int) -> User:
+    def _get(self, user_id: str) -> User:
         user = self.users.get(user_id)
         if not user:
             raise NotFoundError("User not found")

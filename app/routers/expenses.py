@@ -25,7 +25,7 @@ def list_my_expenses(
 def list_all_expenses(
     params: PageParams = Depends(get_page_params),
     month: str | None = Depends(month_query),
-    userId: int | None = Query(None, description="Only this member's expenses"),
+    userId: str | None = Query(None, description="Only this member's expenses (user id)"),
     ctrl: ExpenseController = Depends(get_expense_controller),
 ):
     return ctrl.list_all(params, month, userId)
@@ -40,7 +40,7 @@ def create_expense(
 
 @router.put("/{expense_id}", response_model=ApiResponse[ExpenseOut])
 def update_expense(
-    expense_id: int, body: ExpenseIn, user: User = Depends(current_user),
+    expense_id: str, body: ExpenseIn, user: User = Depends(current_user),
     ctrl: ExpenseController = Depends(get_expense_controller),
 ):
     return ctrl.update(user, expense_id, body)
@@ -48,6 +48,6 @@ def update_expense(
 
 @router.delete("/{expense_id}", response_model=ApiResponse[None])
 def delete_expense(
-    expense_id: int, user: User = Depends(current_user), ctrl: ExpenseController = Depends(get_expense_controller)
+    expense_id: str, user: User = Depends(current_user), ctrl: ExpenseController = Depends(get_expense_controller)
 ):
     return ctrl.delete(user, expense_id)
